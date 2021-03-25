@@ -1,6 +1,8 @@
 kong-lua-sandbox
 ===========
 
+[![Build Status](https://travis-ci.com/Kong/kong-lua-sandbox.svg?branch=master)](https://travis-ci.com/Kong/kong-lua-sandbox)
+
 A pure-lua solution for running untrusted Lua code.
 
 The default behavior is restricting access to "dangerous" functions in Lua, such as `os.execute`.
