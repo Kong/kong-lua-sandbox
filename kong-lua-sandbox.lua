@@ -89,21 +89,8 @@ table.insert table.maxn table.remove table.sort
   end
 end)
 
-local function protect_module(module, module_name)
-  return setmetatable({}, {
-    __index = module,
-    __newindex = function(_, attr_name, _)
-      error('Can not modify ' .. module_name .. '.' .. attr_name .. '. Protected by the sandbox.')
-    end
-  })
-end
-
-('coroutine math os string table'):gsub('%S+', function(module_name)
-  BASE_ENV[module_name] = protect_module(BASE_ENV[module_name], module_name)
-end)
 
 -- auxiliary functions/variables
-
 local string_rep = string.rep
 
 local function sethook(f, key, quota)
@@ -115,6 +102,30 @@ local function cleanup()
   sethook()
   string.rep = string_rep -- luacheck: no global
 end
+
+local function recursive_merge(destination, origin, visited)
+  for k, v in pairs(origin) do
+    if type(v) == "table" then
+      local visited_v = visited[v]
+      if visited_v then
+        destination[k] = visited_v
+      else
+        local dk = destination[k]
+        dk = type(dk) == "table" and dk or {}
+        visited[v] = dk
+        destination[k] = recursive_merge(dk, v, visited)
+      end
+    else
+      destination[k] = v
+    end
+  end
+  local mt = getmetatable(origin)
+  if mt then
+    setmetatable(destination, mt)
+  end
+  return destination
+end
+
 
 -- Public interface: sandbox.protect
 function sandbox.protect(code, options)
@@ -132,16 +143,10 @@ function sandbox.protect(code, options)
 
   local passed_env = options.env or {}
   local env = {}
-  for k, v in pairs(BASE_ENV) do
-    local pv = passed_env[k]
-    if pv ~= nil then
-      env[k] = pv
-    else
-      env[k] = v
-    end
-  end
-  setmetatable(env, { __index = options.env })
   env._G = env
+
+  recursive_merge(env, BASE_ENV, {})
+  recursive_merge(env, passed_env, {})
 
   local f
   if bytecode_blocked then
