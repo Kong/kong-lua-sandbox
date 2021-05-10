@@ -37,6 +37,10 @@ describe('kong-lua-sandbox.run', function()
       local result = { sandbox.run("return 'hello', 'world'") }
       assert.same({ 'hello', 'world' }, result)
     end)
+
+    it('passes parameters to the code', function()
+      assert.equal(sandbox.run("local a, b = ...; return a + b", {}, 1,2), 3)
+    end)
   end)
 
   describe('when handling string.rep', function()
@@ -54,28 +58,66 @@ describe('kong-lua-sandbox.run', function()
       assert.equal('hellohello', string.rep('hello', 2))
     end)
 
-    it('passes parameters to the code', function()
-      assert.equal(sandbox.run("local a, b = ...; return a + b", {}, 1,2), 3)
+    it('allows providing string.rep on the environment', function()
+      local env = { string = { rep = string.rep } }
+      assert.equal('hellohello', sandbox.run("return string.rep('hello', 2)", { env = env }))
     end)
   end)
 
 
-  describe('when the sandboxed code tries to modify the base environment', function()
-
-    it('does not allow modifying the modules', function()
-      assert.error(function() sandbox.run("string.foo = 1") end)
-      assert.error(function() sandbox.run("string.char = 1") end)
+  describe('when the sandboxed code modifies the base environment', function()
+    it('does not persist modifications of base modules on the global BASE_MODULE', function()
+      sandbox.run("string.foo = 1")
+      assert.is_nil(sandbox.run("return string.foo"))
     end)
 
-    it('does not persist modifications of base functions', function()
+    it('persists modifications of base modules on successive calls to the same protected function', function()
+      local f = sandbox.protect("string.foo = (string.foo or 0) + 1; return string.foo")
+      assert.equal(1, f())
+      assert.equal(2, f())
+      assert.equal(3, f())
+    end)
+
+    it('does not persist modifications of base functions on the global BASE_MODULE', function()
       sandbox.run('error = function() end')
       assert.error(function() sandbox.run("error('this should be raised')") end)
     end)
 
-    it('does not persist modification to base functions even when they are provided by the base env', function()
+    it('persists modifications of base functions on successive calls to the same protected function', function()
+      local f = sandbox.protect("error = (type(error) == 'number' and error or 0) + 1; return error")
+      assert.equal(1, f())
+      assert.equal(2, f())
+      assert.equal(3, f())
+    end)
+
+    it('does not persist modification to provided env modules on the global BASE_MODULE', function()
+      local env = { foo = { bar = 'baz' }}
+      sandbox.run('foo.bar = 1', { env=env })
+      assert.equal('baz', env.foo.bar)
+    end)
+
+    it('persists modifications of base functions on successive calls to the same protected function', function()
+      local f = sandbox.protect("error = (type(error) == 'number' and error or 0) + 1; return error")
+      assert.equal(1, f())
+      assert.equal(2, f())
+      assert.equal(3, f())
+    end)
+
+
+
+    it('does not persist modification to provided env functions on the global BASE_MODULE', function()
       local env = {['next'] = 'hello'}
       sandbox.run('next = "bye"', { env=env })
       assert.equal(env['next'], 'hello')
+    end)
+
+    it('does not persist partial modifications to provided env modules on the global BASE_MODULE', function()
+      local env = { math = { e = 2.71828 } } -- Euler's number
+      local similar_numbers = function(a, b)
+        return math.abs(a - b) < 0.01
+      end
+      -- we have modified math by adding math.e but math.log is still available
+      assert.is_true(similar_numbers(1, sandbox.run('return math.log(math.e)', { env=env })))
     end)
   end)
 
@@ -138,8 +180,26 @@ describe('kong-lua-sandbox.run', function()
 
     it('can override the base env with false', function()
       local env = { tostring = false }
-      assert.equal(false, sandbox.run("return tostring", { env = env }))
+      assert.is_false(sandbox.run("return tostring", { env = env }))
     end)
+
+    it('can override _G', function()
+      local env = { _G = "foo" }
+      assert.equals("foo", sandbox.run("return _G", { env = env }))
+    end)
+
+    it('can have recursive references to the environment', function()
+      local env = {}
+      env.recursive = env
+      assert.is_true(sandbox.run("return recursive.recursive == recursive", { env = env }))
+    end)
+
+    it('can have deeper recursive references', function()
+      local env = { mylib = {} }
+      env.mylib.recursive = env.mylib
+      assert.is_true(sandbox.run("return mylib.recursive == mylib", { env = env }))
+    end)
+
   end)
 
 end)
